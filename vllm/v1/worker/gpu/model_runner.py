@@ -202,8 +202,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.draft_tokens_handler = DraftTokensHandler(self.device)
         self.uniform_decode_query_len = 1 + self.num_speculative_steps
 
-        # Pooling models.
+        # Pooling/generation capabilities. In the hybrid research path, the
+        # global runner remains generative, but we also initialize the lightweight
+        # LAST-token pooling path over the same hidden states.
         self.is_pooling_model = self.model_config.runner_type == "pooling"
+        self.enable_generation = self.model_config.runner_type == "generate"
+        self.enable_pooling = (
+            self.is_pooling_model or self.model_config.enable_generate_and_pooling
+        )
         self.pooling_runner: PoolingRunner | None = None
 
         # General request states.
@@ -232,10 +238,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.rejection_sampler: RejectionSampler | None = None
         self.prompt_logprobs_worker: PromptLogprobsWorker | None = None
         self.structured_outputs_worker: StructuredOutputsWorker | None = None
-        if self.is_last_pp_rank and not self.is_pooling_model:
+        if self.is_last_pp_rank and self.enable_generation:
             # Initialize sampling-related workers.
             # These components are only set up on the last PP rank and
-            # for generative (non-pooling) models.
+            # when generation is enabled.
             self.sampler = Sampler(
                 max_num_reqs=self.max_num_reqs,
                 vocab_size=self.vocab_size,
@@ -278,13 +284,22 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         tasks: list[SupportedTask] = []
-        if self.model_config.runner_type == "generate":
+        if self.enable_generation:
             tasks.extend(self.model_state.get_supported_generation_tasks())
-        if self.is_pooling_model:
+            if (
+                self.model_config.enable_generative_audio_transcription
+                and "transcription" not in tasks
+            ):
+                tasks.append("transcription")
+        if self.enable_pooling:
             # Do not rely on pooling_runner here, since this information is needed
             # on the first PP rank, while pooling_runner is only initialized
-            # on the last PP rank.
-            tasks.extend(PoolingRunner.get_supported_tasks(self.model))
+            # on the last PP rank. Hybrid mode uses non-destructive LAST-token
+            # hidden-state pooling, so it advertises embed without model.pooler.
+            if self.model_config.enable_generate_and_pooling:
+                tasks.append("embed")
+            else:
+                tasks.extend(PoolingRunner.get_supported_tasks(self.model))
         return tuple(tasks)
 
     def load_model(self, load_dummy_weights: bool = False, *args, **kwargs) -> None:
@@ -331,7 +346,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.model_state = init_model_state(
             self.vllm_config, self.model, self.encoder_cache, self.device
         )
-        if self.is_pooling_model and self.is_last_pp_rank:
+        if self.enable_pooling and self.is_last_pp_rank:
             self.pooling_runner = PoolingRunner(self.model)
         eplb_models_added |= self.eplb.maybe_register_model(
             self.model,
@@ -633,9 +648,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Only run sampler/pooler on last PP rank (non-last ranks return None).
         if self.is_last_pp_rank:
             assert sample_hidden_states is not None
-            if self.pooling_runner is None:
+            if self.sampler is not None:
                 self._dummy_sampler_run(sample_hidden_states)
-            else:
+            if self.pooling_runner is not None:
                 self._dummy_pooler_run(hidden_states)
 
         torch.accelerator.synchronize()

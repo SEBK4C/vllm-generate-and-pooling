@@ -98,6 +98,7 @@ from vllm.logger import init_logger, suppress_logging
 from vllm.platforms import CpuArchEnum, current_platform
 from vllm.plugins import load_general_plugins
 from vllm.ray.lazy_utils import is_in_ray_actor, is_ray_initialized
+from vllm.tasks import PoolingTask
 from vllm.transformers_utils.config import (
     is_interleaved,
     maybe_override_with_speculators,
@@ -157,6 +158,19 @@ def optional_type(return_type: Callable[[str], T]) -> Callable[[str], T | None]:
         return parse_type(return_type)(val)
 
     return _optional_type
+
+
+def nullable_str_to_bool(val: str | bool | None) -> bool | None:
+    if val is None or isinstance(val, bool):
+        return val
+    normalized = val.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if normalized in {"", "none", "null"}:
+        return None
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got {val!r}.")
 
 
 def union_dict_and_str(val: str) -> str | dict[str, str] | None:
@@ -420,6 +434,14 @@ class EngineArgs:
     hf_config_path: str | None = ModelConfig.hf_config_path
     runner: RunnerOption = ModelConfig.runner
     convert: ConvertOption = ModelConfig.convert
+    enable_generate_and_pooling: bool = ModelConfig.enable_generate_and_pooling
+    pooling_task: PoolingTask | None = ModelConfig.pooling_task
+    pooling_output_dim: int | None = ModelConfig.pooling_output_dim
+    pooling_normalize: bool | None = ModelConfig.pooling_normalize
+    pooling_type: Literal["LAST"] | None = ModelConfig.pooling_type
+    enable_generative_audio_transcription: bool = (
+        ModelConfig.enable_generative_audio_transcription
+    )
     skip_tokenizer_init: bool = ModelConfig.skip_tokenizer_init
     enable_prompt_embeds: bool = ModelConfig.enable_prompt_embeds
     tokenizer_mode: TokenizerMode | str = ModelConfig.tokenizer_mode
@@ -785,6 +807,27 @@ class EngineArgs:
             model_group.add_argument("--model", **model_kwargs["model"])
         model_group.add_argument("--runner", **model_kwargs["runner"])
         model_group.add_argument("--convert", **model_kwargs["convert"])
+        model_group.add_argument(
+            "--enable-generate-and-pooling",
+            **model_kwargs["enable_generate_and_pooling"],
+        )
+        model_group.add_argument("--pooling-task", **model_kwargs["pooling_task"])
+        model_group.add_argument(
+            "--pooling-output-dim", **model_kwargs["pooling_output_dim"]
+        )
+        pooling_normalize_kwargs = model_kwargs["pooling_normalize"]
+        pooling_normalize_kwargs.pop("action", None)
+        pooling_normalize_kwargs.update(
+            {"type": nullable_str_to_bool, "nargs": "?", "const": True}
+        )
+        model_group.add_argument(
+            "--pooling-normalize", **pooling_normalize_kwargs
+        )
+        model_group.add_argument("--pooling-type", **model_kwargs["pooling_type"])
+        model_group.add_argument(
+            "--enable-generative-audio-transcription",
+            **model_kwargs["enable_generative_audio_transcription"],
+        )
         model_group.add_argument("--tokenizer", **model_kwargs["tokenizer"])
         model_group.add_argument("--tokenizer-mode", **model_kwargs["tokenizer_mode"])
         model_group.add_argument(
@@ -1568,6 +1611,14 @@ class EngineArgs:
             hf_config_path=self.hf_config_path,
             runner=self.runner,
             convert=self.convert,
+            enable_generate_and_pooling=self.enable_generate_and_pooling,
+            pooling_task=self.pooling_task,
+            pooling_output_dim=self.pooling_output_dim,
+            pooling_normalize=self.pooling_normalize,
+            pooling_type=self.pooling_type,
+            enable_generative_audio_transcription=(
+                self.enable_generative_audio_transcription
+            ),
             tokenizer=self.tokenizer,  # type: ignore[arg-type]
             tokenizer_mode=self.tokenizer_mode,
             trust_remote_code=self.trust_remote_code,

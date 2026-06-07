@@ -89,9 +89,12 @@ class RayDistributedExecutor(Executor):
         # KV connector setup
         self.has_connector = self.vllm_config.kv_transfer_config is not None
 
-        self.uses_sampler = self.vllm_config.model_config.runner_type != "pooling" and (
-            self.vllm_config.ec_transfer_config is None
-            or self.vllm_config.ec_transfer_config.is_ec_consumer
+        self.uses_sampler = (
+            self.vllm_config.model_config.runner_type != "pooling"
+            and (
+                self.vllm_config.ec_transfer_config is None
+                or self.vllm_config.ec_transfer_config.is_ec_consumer
+            )
         )
 
         self.scheduler_output: SchedulerOutput | None = None
@@ -414,6 +417,16 @@ class RayDistributedExecutor(Executor):
         # Model will execute, defer to sample_tokens() call.
         self.scheduler_output = scheduler_output
         return COMPLETED_NONE_FUTURE if non_block else None
+
+    def pool(  # type: ignore[override]
+        self, non_block: bool = False
+    ) -> ModelRunnerOutput | None | Future[ModelRunnerOutput | None]:
+        scheduler_output = self.scheduler_output
+        if scheduler_output is None:
+            return COMPLETED_NONE_FUTURE if non_block else None
+
+        self.scheduler_output = None
+        return self._execute_dag(scheduler_output, None, non_block)
 
     def sample_tokens(  # type: ignore[override]
         self,

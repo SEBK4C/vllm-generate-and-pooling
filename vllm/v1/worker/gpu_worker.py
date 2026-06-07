@@ -796,6 +796,10 @@ class Worker(WorkerBase):
         return self.model_runner.sample_tokens(grammar_output)
 
     @torch.inference_mode()
+    def pool(self) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
+        return self.model_runner.pool()
+
+    @torch.inference_mode()
     def execute_model(
         self, scheduler_output: "SchedulerOutput"
     ) -> ModelRunnerOutput | AsyncModelRunnerOutput | None:
@@ -861,8 +865,8 @@ class Worker(WorkerBase):
             )
             if (
                 self.use_v2_model_runner
-                and self.model_runner.is_pooling_model
                 and output is None
+                and scheduler_output.scheduled_pooling_reqs
             ):
                 output = self.model_runner.pool()  # type: ignore
             if isinstance(

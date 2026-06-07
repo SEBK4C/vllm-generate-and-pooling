@@ -129,3 +129,6 @@ change and explain why**.
 - **Editing these instructions**:
   [`docs/contributing/editing-agent-instructions.md`](docs/contributing/editing-agent-instructions.md)
   — Rules for modifying AGENTS.md or any domain-specific guide it references.
+- **Hybrid Gemma generate+pooling research**:
+  [`docs/contributing/generate-and-pooling-agent-guide.md`](docs/contributing/generate-and-pooling-agent-guide.md)
+  — Operating rules for the single-model generation, embeddings, and transcription research fork.

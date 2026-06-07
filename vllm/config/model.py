@@ -336,6 +336,29 @@ class ModelConfig:
     """Pooler config which controls the behaviour of output pooling in pooling
     models."""
 
+    enable_generate_and_pooling: bool = False
+    """Research flag that lets a generative runner also expose an embedding
+    pooling path over the same resident model. This preserves the normal
+    generation runner and does not invoke pooling model conversion."""
+
+    pooling_task: PoolingTask | None = None
+    """Pooling task to expose when generate-and-pooling mode is enabled."""
+
+    pooling_output_dim: int | None = None
+    """Expected output dimension for hybrid hidden-state pooling. The Gemma 4
+    12B research target uses the full hidden size, 3840, without truncation."""
+
+    pooling_normalize: bool | None = None
+    """Whether hybrid hidden-state pooling should return normalized vectors."""
+
+    pooling_type: Literal["LAST"] | None = None
+    """Pooling method for hybrid hidden-state embeddings. Only LAST-token
+    pooling is supported in the initial research path."""
+
+    enable_generative_audio_transcription: bool = False
+    """Research flag that advertises transcription for a generative multimodal
+    transcription shim using the resident model, not a separate ASR model."""
+
     # Multimodal config and init vars
     multimodal_config: MultiModalConfig | None = None
     """Configuration for multimodal model. If `None`, this will be inferred
@@ -602,6 +625,20 @@ class ModelConfig:
                     f"You can pass `--convert {convert_option} to adapt "
                     "it into a pooling model."
                 )
+
+        if self.enable_generate_and_pooling:
+            if self.runner_type != "generate":
+                raise ValueError(
+                    "--enable-generate-and-pooling currently requires "
+                    "--runner generate or --runner auto resolving to generate."
+                )
+            if self.convert_type != "none":
+                raise ValueError(
+                    "--enable-generate-and-pooling must not use a destructive "
+                    "--convert mode; hybrid pooling uses non-destructive "
+                    "hidden-state pooling."
+                )
+            self._init_generate_and_pooling_config()
 
         # Note: Initialize these attributes early because transformers fallback
         # may fail to load dynamic modules in child processes
@@ -1509,6 +1546,60 @@ class ModelConfig:
             )
 
         return diff_sampling_param
+
+    def _init_generate_and_pooling_config(self) -> None:
+        pooling_task = self.pooling_task or "embed"
+        if pooling_task != "embed":
+            raise ValueError(
+                "--enable-generate-and-pooling initially supports only "
+                "--pooling-task embed."
+            )
+        self.pooling_task = pooling_task
+
+        output_dim = self.pooling_output_dim or 3840
+        if output_dim != 3840:
+            raise ValueError(
+                "--enable-generate-and-pooling currently requires "
+                "--pooling-output-dim 3840. This path does not support "
+                "Matryoshka embeddings or truncation."
+            )
+        self.pooling_output_dim = output_dim
+
+        pooling_type = self.pooling_type or "LAST"
+        if pooling_type != "LAST":
+            raise ValueError(
+                "--enable-generate-and-pooling initially supports only "
+                "--pooling-type LAST."
+            )
+        self.pooling_type = pooling_type
+
+        if self.pooling_normalize is False:
+            raise ValueError(
+                "--enable-generate-and-pooling requires "
+                "--pooling-normalize true for the initial research baseline."
+            )
+        self.pooling_normalize = True
+
+        if self.pooler_config is None:
+            self.pooler_config = PoolerConfig(
+                task=pooling_task,
+                pooling_type=pooling_type,
+            )
+        else:
+            if self.pooler_config.task is None:
+                self.pooler_config.task = pooling_task
+            elif self.pooler_config.task != pooling_task:
+                raise ValueError(
+                    "pooler_config.task conflicts with --pooling-task "
+                    f"{pooling_task!r}."
+                )
+            if (
+                self.pooler_config.pooling_type is None
+                and self.pooler_config.seq_pooling_type is None
+                and self.pooler_config.tok_pooling_type is None
+            ):
+                self.pooler_config.pooling_type = pooling_type
+                self.pooler_config.seq_pooling_type = pooling_type
 
     def get_pooling_task(
         self, supported_tasks: tuple[SupportedTask, ...]

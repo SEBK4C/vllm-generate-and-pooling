@@ -218,6 +218,12 @@ class SchedulerOutput:
     # Only used for v2 model runner.
     preempted_req_ids: set[str] | None = None
 
+    # Whether the scheduled step contains pooling or generation requests.
+    # Hybrid generate-and-pooling mode uses these per-step flags to choose
+    # pool() vs sample_tokens() after the shared model forward.
+    scheduled_pooling_reqs: bool = False
+    scheduled_generation_reqs: bool = False
+
     # Whether any of the scheduled requests use structured output.
     # Set only in async scheduling case.
     has_structured_output_requests: bool = False
