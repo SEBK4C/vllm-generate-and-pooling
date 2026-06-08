@@ -1,90 +1,214 @@
-<!-- markdownlint-disable MD001 MD041 -->
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-dark.png">
-    <img alt="vLLM" src="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/assets/logos/vllm-logo-text-light.png" width=55%>
-  </picture>
-</p>
+# vLLM Generate + Pooling Hybrid Research Fork
 
-<h3 align="center">
-Easy, fast, and cheap LLM serving for everyone
-</h3>
+This repository is the `vllm-generate-and-pooling` research fork of
+[vLLM](https://github.com/vllm-project/vllm). It keeps the core vLLM serving
+stack and adds an experimental path for one resident generative model to serve
+both generation and LAST-token hidden-state pooling from the same logical model
+load.
 
-<p align="center">
-| <a href="https://docs.vllm.ai"><b>Documentation</b></a> | <a href="https://blog.vllm.ai/"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2309.06180"><b>Paper</b></a> | <a href="https://x.com/vllm_project"><b>Twitter/X</b></a> | <a href="https://discuss.vllm.ai"><b>User Forum</b></a> | <a href="https://slack.vllm.ai"><b>Developer Slack</b></a> |
-</p>
+The immediate target is Gemma 4 12B QAT:
 
-🔥 We have built a vLLM website to help you get started with vLLM. Please visit [vllm.ai](https://vllm.ai) to learn more.
-For events, please visit [vllm.ai/events](https://vllm.ai/events) to join us.
-
----
-
-## About
-
-vLLM is a fast and easy-to-use library for LLM inference and serving.
-
-Originally developed in the [Sky Computing Lab](https://sky.cs.berkeley.edu) at UC Berkeley, vLLM has grown into one of the most active open-source AI projects built and maintained by a diverse community of many dozens of academic institutions and companies from over 2000 contributors.
-
-vLLM is fast with:
-
-- State-of-the-art serving throughput
-- Efficient management of attention key and value memory with [**PagedAttention**](https://blog.vllm.ai/2023/06/20/vllm.html)
-- Continuous batching of incoming requests, chunked prefill, prefix caching
-- Fast and flexible model execution with piecewise and full CUDA/HIP graphs
-- Quantization: FP8, MXFP8/MXFP4, NVFP4, INT8, INT4, GPTQ/AWQ, GGUF, compressed-tensors, ModelOpt, TorchAO, and [more](https://docs.vllm.ai/en/latest/features/quantization/index.html)
-- Optimized attention kernels including FlashAttention, FlashInfer, TRTLLM-GEN, FlashMLA, and Triton
-- Optimized GEMM/MoE kernels for various precisions using CUTLASS, TRTLLM-GEN, CuTeDSL
-- Speculative decoding including n-gram, suffix, EAGLE, DFlash
-- Automatic kernel generation and graph-level transformations using torch.compile
-- Disaggregated prefill, decode, and encode
-
-vLLM is flexible and easy to use with:
-
-- Seamless integration with popular Hugging Face models
-- High-throughput serving with various decoding algorithms, including *parallel sampling*, *beam search*, and more
-- Tensor, pipeline, data, expert, and context parallelism for distributed inference
-- Streaming outputs
-- Generation of structured outputs using xgrammar or guidance
-- Tool calling and reasoning parsers
-- OpenAI-compatible API server, plus Anthropic Messages API and gRPC support
-- Efficient multi-LoRA support for dense and MoE layers
-- Support for NVIDIA GPUs, AMD GPUs, and x86/ARM/PowerPC CPUs. Additionally, diverse hardware plugins such as Google TPUs, Intel Gaudi, IBM Spyre, Huawei Ascend, Rebellions NPU, Apple Silicon, MetaX GPU, and more.
-
-vLLM seamlessly supports 200+ model architectures on Hugging Face, including:
-
-- Decoder-only LLMs (e.g., Llama, Qwen, Gemma)
-- Mixture-of-Expert LLMs (e.g., Mixtral, DeepSeek-V3, Qwen-MoE, GPT-OSS)
-- Hybrid attention and state-space models (e.g., Mamba, Qwen3.5)
-- Multi-modal models (e.g., LLaVA, Qwen-VL, Pixtral)
-- Embedding and retrieval models (e.g., E5-Mistral, GTE, ColBERT)
-- Reward and classification models (e.g., Qwen-Math)
-
-Find the full list of supported models [here](https://docs.vllm.ai/en/latest/models/supported_models.html).
-
-## Getting Started
-
-Install vLLM with [`uv`](https://docs.astral.sh/uv/) (recommended) or `pip`:
-
-```bash
-uv pip install vllm
+```text
+google/gemma-4-12B-it-qat-w4a16-ct
 ```
 
-Or [build from source](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/index.html#build-wheel-from-source) for development.
+The long-term goal is a single vLLM server process with one Gemma 4 model copy in
+GPU memory serving:
 
-Visit our [documentation](https://docs.vllm.ai/en/latest/) to learn more.
+1. OpenAI-compatible chat/completions.
+2. OpenAI-compatible embeddings from normalized full-size hidden states.
+3. A best-effort Gemma multimodal generation transcription shim.
 
-- [Installation](https://docs.vllm.ai/en/latest/getting_started/installation.html)
-- [Quickstart](https://docs.vllm.ai/en/latest/getting_started/quickstart.html)
-- [List of Supported Models](https://docs.vllm.ai/en/latest/models/supported_models.html)
+This is not upstream vLLM's default behavior. It is a research path for exploring
+whether embeddings can be treated as a second request type over shared prefill
+machinery instead of as a second model instance.
+
+## What this fork changes
+
+Current upstream vLLM generally treats `generate` and `pooling` as separate runner
+modes. This fork adds an explicit experimental flag:
+
+```bash
+--enable-generate-and-pooling
+```
+
+With that flag enabled, the server keeps the model on the generation runner and
+adds a lightweight pooling path over the final hidden states. The initial pooling
+implementation is intentionally conservative:
+
+- Pooling task: `embed` only.
+- Pooling type: `LAST` token only.
+- Output size: `3840` dimensions only for the Gemma 4 12B target.
+- Normalization: required.
+- Matryoshka/truncation: rejected.
+- Mixed generation+pooling microbatches: rejected until the scheduler milestone
+  implements a safe task-homogeneous batching policy.
+- `--async-scheduling`: still experimental for this hybrid path and not required
+  in the baseline command.
+
+LAST-token normalized hidden-state embeddings are an untrained research baseline.
+Do not treat them as production-quality retrieval embeddings until the W4A16 QAT
+quality gate has passed against BF16/reference embeddings on the target retrieval
+workload.
+
+## Install from this repository
+
+Use the fork checkout as the install path. From the repository root:
+
+```bash
+cd /path/to/vllm-generate-and-pooling
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -r requirements/lint.txt
+VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=auto
+```
+
+If you are developing C/C++ kernels or rebuilding native extensions, omit
+`VLLM_USE_PRECOMPILED=1`:
+
+```bash
+uv pip install -e . --torch-backend=auto
+```
+
+## Run the hybrid server
+
+Baseline command for the Gemma 4 12B QAT target:
+
+```bash
+vllm serve google/gemma-4-12B-it-qat-w4a16-ct \
+  --runner generate \
+  --enable-generate-and-pooling \
+  --pooling-task embed \
+  --pooling-output-dim 3840 \
+  --pooling-normalize true \
+  --pooling-type LAST \
+  --enable-generative-audio-transcription \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.90 \
+  --limit-mm-per-prompt '{"image": 4, "audio": 1}' \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+Do not add `--async-scheduling` to the required baseline until mixed
+`SamplingParams` and `PoolingParams` traffic has passed the M4 scheduler SLOs.
+
+## Use the endpoints
+
+### Chat completions
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "google/gemma-4-12B-it-qat-w4a16-ct",
+    "messages": [
+      {"role": "user", "content": "Explain solar panel degradation in one paragraph."}
+    ],
+    "max_tokens": 128
+  }'
+```
+
+### Embeddings
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "google/gemma-4-12B-it-qat-w4a16-ct",
+    "input": "Represent this query for retrieval: solar panel degradation",
+    "encoding_format": "float"
+  }'
+```
+
+Expected embedding behavior in this research path:
+
+- One embedding per input item.
+- Length is `3840`.
+- Values are finite floats.
+- Vector norm should be approximately `1.0`.
+- No generated text is returned.
+
+`encoding_format: "base64"` should follow the existing vLLM/OpenAI-compatible
+embedding serialization path.
+
+### Pooling debug endpoint
+
+```bash
+curl http://localhost:8000/pooling \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "google/gemma-4-12B-it-qat-w4a16-ct",
+    "input": "debug the raw pooling path",
+    "encoding_format": "float"
+  }'
+```
+
+### Audio transcription
+
+The current flag advertises the planned Gemma generative transcription path:
+
+```bash
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F model=google/gemma-4-12B-it-qat-w4a16-ct \
+  -F file=@sample.wav \
+  -F response_format=json
+```
+
+The transcription shim is best-effort multimodal generation, not Whisper-compatible
+ASR. Timestamp, segment, verbose JSON, and logprob options must return clear HTTP
+400 errors unless they are explicitly implemented later.
+
+## Validation gates before claiming success
+
+Before treating this as complete, run and document:
+
+1. W4A16 QAT embedding quality against BF16/reference embeddings.
+2. VRAM comparison between one hybrid instance and two independent model-serving
+   instances.
+3. `/v1/chat/completions` correctness.
+4. `/v1/embeddings` shape, finite-value, and normalization checks.
+5. `/v1/audio/transcriptions` Gemma-shim correctness after the shim is fully
+   implemented.
+6. Mixed chat+embedding load test with concrete p99 inter-token and embedding
+   latency SLOs.
+7. Logs confirming one logical Gemma model load and no duplicate model copy.
+
+See `docs/contributing/generate-and-pooling-implementation-plan.md` for the
+milestone plan and `docs/contributing/generate-and-pooling-agent-guide.md` for
+agent operating rules.
+
+## What remains from upstream vLLM
+
+This fork still uses vLLM's core strengths:
+
+- PagedAttention for efficient KV-cache memory management.
+- Continuous batching, chunked prefill, and prefix caching.
+- CUDA/HIP graph execution paths.
+- Quantization support including compressed-tensors checkpoints.
+- OpenAI-compatible serving APIs.
+- Hugging Face model integration.
+- Tensor, pipeline, data, expert, and context parallelism.
+- Multimodal model support where the underlying model and renderer support it.
+
+For general vLLM documentation, see <https://docs.vllm.ai/>. For the upstream
+project, see <https://github.com/vllm-project/vllm>.
 
 ## Contributing
 
-We welcome and value any contributions and collaborations.
-Please check out [Contributing to vLLM](https://docs.vllm.ai/en/latest/contributing/index.html) for how to get involved.
+This fork is research-oriented. Agents and humans should read the hybrid guide
+before changing runner, scheduler, pooling, embedding, or transcription code:
+
+```text
+docs/contributing/generate-and-pooling-agent-guide.md
+```
+
+If a change is intended for upstream vLLM, split it into a minimal upstreamable
+patch and follow the upstream contribution process.
 
 ## Citation
 
-If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs/2309.06180):
+If you use vLLM for research, cite the original vLLM paper:
 
 ```bibtex
 @inproceedings{kwon2023efficient,
@@ -94,17 +218,3 @@ If you use vLLM for your research, please cite our [paper](https://arxiv.org/abs
   year={2023}
 }
 ```
-
-## Contact Us
-
-<!-- --8<-- [start:contact-us] -->
-- For technical questions and feature requests, please use GitHub [Issues](https://github.com/vllm-project/vllm/issues)
-- For discussing with fellow users, please use the [vLLM Forum](https://discuss.vllm.ai)
-- For coordinating contributions and development, please use [Slack](https://slack.vllm.ai)
-- For security disclosures, please use GitHub's [Security Advisories](https://github.com/vllm-project/vllm/security/advisories) feature
-- For collaborations and partnerships, please contact us at [collaboration@vllm.ai](mailto:collaboration@vllm.ai)
-<!-- --8<-- [end:contact-us] -->
-
-## Media Kit
-
-- If you wish to use vLLM's logo, please refer to [our media kit repo](https://github.com/vllm-project/media-kit)
