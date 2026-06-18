@@ -929,6 +929,27 @@ class Scheduler(SchedulerInterface):
             else None
         )
 
+        scheduled_req_ids = set(num_scheduled_tokens)
+        scheduled_pooling_reqs = any(
+            self.requests[req_id].pooling_params is not None
+            for req_id in scheduled_req_ids
+        )
+        scheduled_generation_reqs = any(
+            self.requests[req_id].sampling_params is not None
+            for req_id in scheduled_req_ids
+        )
+        if (
+            self.vllm_config.model_config.enable_generate_and_pooling
+            and scheduled_pooling_reqs
+            and scheduled_generation_reqs
+        ):
+            raise RuntimeError(
+                "Hybrid generate-and-pooling mode requires task-homogeneous "
+                "scheduler steps. Mixed generation/pooling microbatches are "
+                "intentionally rejected until the M4 scheduler policy splits "
+                "them safely."
+            )
+
         scheduler_output = SchedulerOutput(
             scheduled_new_reqs=new_reqs_data,
             scheduled_cached_reqs=cached_reqs_data,
@@ -945,6 +966,8 @@ class Scheduler(SchedulerInterface):
             finished_req_ids=self.finished_req_ids,
             free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
             new_block_ids_to_zero=new_block_ids_to_zero,
+            scheduled_pooling_reqs=scheduled_pooling_reqs,
+            scheduled_generation_reqs=scheduled_generation_reqs,
         )
 
         # NOTE(Kuntai): this function is designed for multiple purposes:

@@ -3244,6 +3244,12 @@ class GPUModelRunner(
 
             supported_tasks.append("transcription")
 
+        if (
+            self.model_config.enable_generative_audio_transcription
+            and "transcription" not in supported_tasks
+        ):
+            supported_tasks.append("transcription")
+
         if supports_realtime(model):
             supported_tasks.append("realtime")
 
@@ -3261,7 +3267,9 @@ class GPUModelRunner(
 
         if self.model_config.runner_type == "generate":
             tasks.extend(self.get_supported_generation_tasks())
-        if self.model_config.runner_type == "pooling":
+        if self.model_config.enable_generate_and_pooling:
+            tasks.append("embed")
+        elif self.model_config.runner_type == "pooling":
             tasks.extend(self.get_supported_pooling_tasks())
 
         return tuple(tasks)

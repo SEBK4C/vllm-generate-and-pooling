@@ -460,7 +460,10 @@ class EngineCore:
         ):
             model_output = future.result()
             if model_output is None:
-                model_output = self.model_executor.sample_tokens(grammar_output)
+                if scheduler_output.scheduled_pooling_reqs:
+                    model_output = self.model_executor.pool()
+                else:
+                    model_output = self.model_executor.sample_tokens(grammar_output)
 
         # Before processing the model output, process any aborts that happened
         # during the model execution.
@@ -517,7 +520,9 @@ class EngineCore:
             if self.is_ec_consumer:
                 model_executed = scheduler_output.total_num_scheduled_tokens > 0
 
-            if self.is_pooling_model or not model_executed:
+            if scheduler_output.scheduled_pooling_reqs:
+                future = self.model_executor.pool(non_block=True)
+            elif self.is_pooling_model or not model_executed:
                 # No sampling required (no requests scheduled).
                 future = cast(Future[ModelRunnerOutput], exec_future)
             else:

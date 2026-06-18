@@ -164,6 +164,20 @@ class PoolingParams(
                 self.use_activation = True
 
             if self.dimensions is not None:
+                if model_config.enable_generate_and_pooling:
+                    expected_dim = model_config.pooling_output_dim or 3840
+                    if self.dimensions != expected_dim:
+                        raise ValueError(
+                            "Hybrid generate-and-pooling embeddings do not "
+                            "support Matryoshka dimensions or truncation; "
+                            f"expected dimensions={expected_dim}, got "
+                            f"{self.dimensions}."
+                        )
+                    # The request asked for the full hidden size. Keep the
+                    # worker path untruncated by clearing the Matryoshka field.
+                    self.dimensions = None
+                    return
+
                 if not model_config.is_matryoshka:
                     raise ValueError(
                         f'Model "{model_config.served_model_name}" does not '

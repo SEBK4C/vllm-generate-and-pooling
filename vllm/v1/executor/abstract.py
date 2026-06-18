@@ -246,6 +246,22 @@ class Executor(ABC):
         )
         return output[0]
 
+    @overload
+    def pool(self, non_block: Literal[False] = False) -> ModelRunnerOutput | None:
+        pass
+
+    @overload
+    def pool(self, non_block: Literal[True] = True) -> Future[ModelRunnerOutput | None]:
+        pass
+
+    def pool(
+        self, non_block: bool = False
+    ) -> ModelRunnerOutput | None | Future[ModelRunnerOutput | None]:
+        output = self.collective_rpc(
+            "pool", non_block=non_block
+        )
+        return output[0]
+
     def execute_dummy_batch(self) -> None:
         self.collective_rpc("execute_dummy_batch")
 

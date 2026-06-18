@@ -128,6 +128,15 @@ class UniProcExecutor(Executor):
             single_value=True,
         )
 
+    def pool(  # type: ignore[override]
+        self, non_block: bool = False
+    ) -> ModelRunnerOutput | None | Future[ModelRunnerOutput | None]:
+        return self.collective_rpc(
+            "pool",
+            non_block=non_block,
+            single_value=True,
+        )
+
     def take_draft_token_ids(self) -> DraftTokenIds | None:
         return self.collective_rpc("take_draft_token_ids", single_value=True)
 

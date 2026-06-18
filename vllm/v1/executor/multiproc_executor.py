@@ -328,6 +328,17 @@ class MultiprocExecutor(Executor):
             kv_output_aggregator=self.kv_output_aggregator,
         )
 
+    def pool(  # type: ignore[override]
+        self, non_block: bool = False
+    ) -> ModelRunnerOutput | None | Future[ModelRunnerOutput | None]:
+        return self.collective_rpc(
+            "pool",
+            unique_reply_rank=self.output_rank,
+            non_block=non_block,
+            timeout=envs.VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS,
+            kv_output_aggregator=self.kv_output_aggregator,
+        )
+
     def execute_dummy_batch(self) -> None:
         self.collective_rpc("execute_dummy_batch", unique_reply_rank=self.output_rank)
 
